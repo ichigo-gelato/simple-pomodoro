@@ -1,6 +1,8 @@
 :root {
   --primary: #0052cc;
   --primary-dark: #003c99;
+  --stop: #4b5563;
+  --stop-dark: #334155;
   --surface: #ffffff;
   --surface-muted: #f5f7fb;
   --text: #0f172a;
@@ -60,7 +62,7 @@ h1 {
 .timer-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-end;
   gap: 16px;
   flex-wrap: wrap;
 }
@@ -68,34 +70,41 @@ h1 {
 .title-group {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.timer-caption {
-  margin: 0;
-  color: var(--muted);
-  font-size: 15px;
+  gap: 14px;
+  justify-content: flex-start;
+  flex: 1 1 220px;
 }
 
 .status {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   color: var(--muted);
-  font-weight: 700;
-  font-size: 16px;
+  font-weight: 800;
+  font-size: 20px;
+  margin-left: auto;
+  align-self: flex-end;
 }
 
-.status-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: #cbd5e1;
-  display: inline-block;
+.status-label {
+  font-size: 24px;
 }
 
-.status-dot.on {
-  background: #22c55e;
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: #e2e8f0;
+  color: #475569;
+  transition: background 160ms ease, color 160ms ease;
+}
+
+.status-icon.on {
+  background: #dcfce7;
+  color: #15803d;
 }
 
 .mode-label {
@@ -114,7 +123,7 @@ h1 {
 
 .time {
   margin: 4px 0 8px;
-  font-size: clamp(64px, 18vw, 100px);
+  font-size: clamp(68px, 20vw, 108px);
   letter-spacing: 0.04em;
   font-weight: 700;
 }
@@ -127,17 +136,33 @@ h1 {
 }
 
 .progress {
+  position: relative;
   width: 100%;
-  height: 10px;
-  background: #e2e8f0;
+  height: 12px;
+  background: linear-gradient(90deg, rgba(0, 82, 204, 0.12), rgba(0, 163, 175, 0.12));
   border-radius: 999px;
   overflow: hidden;
 }
 
+.progress-elapsed,
 .progress-value {
+  position: absolute;
+  inset: 0;
   height: 100%;
+}
+
+.progress-elapsed {
+  background: linear-gradient(90deg, rgba(0, 82, 204, 0.18), rgba(0, 163, 175, 0.18));
+  transform-origin: right center;
+  transform: scaleX(var(--elapsed));
+  transition: transform 0.25s ease;
+}
+
+.progress-value {
   background: linear-gradient(90deg, var(--primary), var(--accent));
-  transition: width 0.2s ease;
+  transform-origin: left center;
+  transform: scaleX(var(--progress));
+  transition: transform 0.25s ease;
 }
 
 .controls {
@@ -147,17 +172,18 @@ h1 {
 }
 
 .btn {
-  height: 52px;
+  height: 56px;
   border-radius: 12px;
   border: 1px solid transparent;
-  font-weight: 700;
-  font-size: 17px;
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: 0.01em;
   cursor: pointer;
   transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease;
 }
 
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
@@ -172,15 +198,24 @@ h1 {
   transform: translateY(-1px);
 }
 
-.btn-ghost {
-  background: var(--surface);
-  border-color: #e2e8f0;
-  color: var(--text);
+.btn-stop {
+  background: var(--stop);
+  color: #fff;
+  box-shadow: 0 12px 30px rgba(51, 65, 85, 0.2);
 }
 
-.btn-ghost:not(:disabled):hover {
-  border-color: var(--primary);
-  color: var(--primary);
+.btn-stop:disabled {
+  background: #fff;
+  color: #94a3b8;
+  border-color: #d4dbe5;
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.btn-stop:not(:disabled):hover {
+  background: var(--stop-dark);
+  transform: translateY(-1px);
 }
 
 .btn-outline {
@@ -208,11 +243,11 @@ h1 {
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
+  gap: 10px;
+  padding: 10px 16px;
   border-radius: 999px;
   font-weight: 700;
-  font-size: 16px;
+  font-size: 22px;
   letter-spacing: 0.01em;
 }
 
@@ -224,6 +259,11 @@ h1 {
 .badge-break {
   color: #0f5132;
   background: #d1fae5;
+}
+
+.icon {
+  width: 22px;
+  height: 22px;
 }
 
 .toggle-row {
@@ -290,6 +330,6 @@ h1 {
 
   .status {
     width: 100%;
-    justify-content: flex-start;
+    justify-content: flex-end;
   }
 }
