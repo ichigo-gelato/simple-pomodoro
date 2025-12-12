@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ポモドーロタイマー</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Noto+Sans+JP:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div>
+          <h1>ポモドーロタイマー</h1>
+          <p class="lede">25分の集中と5分の休憩を自動で繰り返すシンプルなタイマーです。</p>
+        </div>
+      </header>
+      <section class="card">
+        <div id="root"></div>
+      </section>
+    </main>
+
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      const WORK_DURATION = 25 * 60; // seconds
+      const BREAK_DURATION = 5 * 60; // seconds
+
+      const formatTime = (seconds) => {
+        const m = String(Math.floor(seconds / 60)).padStart(2, "0");
+        const s = String(seconds % 60).padStart(2, "0");
+        return `${m}:${s}`;
+      };
+
+      const ModeBadge = ({ mode }) => (
+        <span className={`badge ${mode === "work" ? "badge-work" : "badge-break"}`}>
+          {mode === "work" ? "作業" : "休憩"}
+        </span>
+      );
+
+      const ProgressBar = ({ value }) => (
+        <div className="progress" role="presentation" aria-hidden>
+          <div className="progress-value" style={{ width: `${value}%` }} />
+        </div>
+      );
+
+      const PomodoroTimer = () => {
+        const [mode, setMode] = useState("work");
+        const [secondsLeft, setSecondsLeft] = useState(WORK_DURATION);
+        const [isRunning, setIsRunning] = useState(false);
+        const [soundEnabled, setSoundEnabled] = useState(true);
+        const firstRender = useRef(true);
+
+        useEffect(() => {
+          if (!isRunning) return;
+
+          const id = setInterval(() => {
+            setSecondsLeft((prev) => {
+              if (prev <= 1) {
+                const nextMode = mode === "work" ? "break" : "work";
+                setMode(nextMode);
+                return nextMode === "work" ? WORK_DURATION : BREAK_DURATION;
+              }
+              return prev - 1;
+            });
+          }, 1000);
+
+          return () => clearInterval(id);
+        }, [isRunning, mode]);
+
+        const progress = useMemo(() => {
+          const base = mode === "work" ? WORK_DURATION : BREAK_DURATION;
+          return (secondsLeft / base) * 100;
+        }, [mode, secondsLeft]);
+
+        useEffect(() => {
+          if (firstRender.current) {
+            firstRender.current = false;
+            return;
+          }
+          if (!isRunning || !soundEnabled) return;
+
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.value = 880;
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          gain.gain.setValueAtTime(0.15, ctx.currentTime);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.2);
+          osc.onended = () => ctx.close();
+        }, [isRunning, mode, soundEnabled]);
+
+        const handleStart = () => setIsRunning(true);
+        const handleStop = () => setIsRunning(false);
+        const handleReset = () => {
+          setIsRunning(false);
+          setMode("work");
+          setSecondsLeft(WORK_DURATION);
+        };
+
+        return (
+          <div className="timer">
+            <div className="timer-header">
+              <div className="title-group">
+                <ModeBadge mode={mode} />
+                <p className="timer-caption">25分集中 → 5分休憩の無限ループ</p>
+              </div>
+              <div className="status">
+                <span className={`status-dot ${isRunning ? "on" : "off"}`} aria-hidden />
+                <span className="status-label">{isRunning ? "動作中" : "一時停止"}</span>
+              </div>
+            </div>
+
+            <div className="display">
+              <p className="mode-label">{mode === "work" ? "集中タイム" : "休憩タイム"}</p>
+              <p className="time" role="timer" aria-live="polite">
+                {formatTime(secondsLeft)}
+              </p>
+              <p className="progress-info">残り {Math.round(progress)}%</p>
+              <ProgressBar value={progress} />
+            </div>
+
+            <div className="controls" aria-label="タイマー操作">
+              <button className="btn btn-primary" onClick={handleStart} disabled={isRunning}>
+                スタート
+              </button>
+              <button className="btn btn-ghost" onClick={handleStop} disabled={!isRunning}>
+                ストップ
+              </button>
+              <button className="btn btn-outline" onClick={handleReset}>
+                リセット
+              </button>
+            </div>
+
+            <div className="toggle-row">
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={soundEnabled}
+                  onChange={(e) => setSoundEnabled(e.target.checked)}
+                />
+                <span className="slider" aria-hidden></span>
+                <span className="switch-label">切り替わり時のサウンドを鳴らす</span>
+              </label>
+            </div>
+
+            <ul className="notes">
+              <li>スタートを押すと25分の作業と5分の休憩を自動で繰り返します。</li>
+              <li>ストップで現在のカウントを一時停止します。再度スタートで再開します。</li>
+              <li>リセットすると25:00の作業タイマーから再スタートできます。</li>
+            </ul>
+          </div>
+        );
+      };
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<PomodoroTimer />);
+    </script>
+  </body>
+</html>
