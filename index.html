@@ -34,9 +34,12 @@
       const WORK_DURATION = 25 * 60; // seconds
       const BREAK_DURATION = 5 * 60; // seconds
 
+      const STORAGE_KEY = "pomodoro_state_v2";
+
       const formatTime = (seconds) => {
-        const m = String(Math.floor(seconds / 60)).padStart(2, "0");
-        const s = String(seconds % 60).padStart(2, "0");
+        const safe = Math.max(0, Math.floor(seconds));
+        const m = String(Math.floor(safe / 60)).padStart(2, "0");
+        const s = String(safe % 60).padStart(2, "0");
         return `${m}:${s}`;
       };
 
@@ -92,62 +95,254 @@
         </div>
       );
 
+      const durationSecondsForMode = (mode) => (mode === "work" ? WORK_DURATION : BREAK_DURATION);
+      const durationMsForMode = (mode) => durationSecondsForMode(mode) * 1000;
+
+      // 画面ロック / タブ移動で setInterval が止まっても復帰時に正しい残り時間へワープする設計。
+      // 重要: 「残り秒」を真実にせず、「終了予定時刻 endAtMs」を真実にする。
       const PomodoroTimer = () => {
         const [mode, setMode] = useState("work");
-        const [secondsLeft, setSecondsLeft] = useState(WORK_DURATION);
         const [isRunning, setIsRunning] = useState(false);
         const [soundEnabled, setSoundEnabled] = useState(true);
+
+        // endAtMs: 動作中のみ有効（現在モードが終了する予定の UNIX time ms）
+        const [endAtMs, setEndAtMs] = useState(null);
+
+        // pausedRemainingMs: 停止中のみ有効（再開時に使う残り ms）
+        const [pausedRemainingMs, setPausedRemainingMs] = useState(null);
+
+        // 画面表示を更新するための「ダミー」状態（これでレンダが走る）
+        const [nowTick, setNowTick] = useState(() => Date.now());
+
         const firstRender = useRef(true);
+        const prevModeRef = useRef(mode);
 
-        useEffect(() => {
-          if (!isRunning) return;
+        const beep = () => {
+          try {
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            const ctx = new Ctx();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = "sine";
+            osc.frequency.value = 880;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            gain.gain.setValueAtTime(0.15, ctx.currentTime);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.3);
+            osc.onended = () => {
+              try {
+                ctx.close();
+              } catch (e) {}
+            };
+          } catch (e) {
+            // iOS等でユーザ操作なし再生が弾かれる場合があるため黙って無視
+          }
+        };
 
-          const id = setInterval(() => {
-            setSecondsLeft((prev) => {
-              if (prev <= 1) {
-                const nextMode = mode === "work" ? "break" : "work";
-                setMode(nextMode);
-                return nextMode === "work" ? WORK_DURATION : BREAK_DURATION;
-              }
-              return prev - 1;
-            });
-          }, 1000);
+        const computeSecondsLeft = () => {
+          if (isRunning && typeof endAtMs === "number") {
+            return Math.ceil(Math.max(0, endAtMs - nowTick) / 1000);
+          }
+          if (!isRunning && typeof pausedRemainingMs === "number") {
+            return Math.ceil(Math.max(0, pausedRemainingMs) / 1000);
+          }
+          return durationSecondsForMode(mode);
+        };
 
-          return () => clearInterval(id);
-        }, [isRunning, mode]);
+        const secondsLeft = computeSecondsLeft();
 
         const progress = useMemo(() => {
-          const base = mode === "work" ? WORK_DURATION : BREAK_DURATION;
+          const base = durationSecondsForMode(mode);
           return (secondsLeft / base) * 100;
         }, [mode, secondsLeft]);
 
+        // 進みすぎた時間を取り戻しつつ、モード遷移を処理する。
+        const syncNow = () => {
+          const now = Date.now();
+
+          // running でなければ表示更新のみ
+          if (!isRunning || typeof endAtMs !== "number") {
+            setNowTick(now);
+            return;
+          }
+
+          // endAtMs を越えていたら、経過分だけモード遷移する。
+          // 例: ロック中に 30分経った場合、work→break→work と進める。
+          let currentMode = mode;
+          let currentEndAt = endAtMs;
+
+          // 安全のため、無限ループ防止
+          let guard = 0;
+          while (now >= currentEndAt && guard < 20) {
+            const nextMode = currentMode === "work" ? "break" : "work";
+            currentMode = nextMode;
+            currentEndAt = currentEndAt + durationMsForMode(nextMode);
+            guard += 1;
+          }
+
+          // 大幅に時間が飛んだ場合のため、ガード上限に達したら数学的に前進させる
+          if (now >= currentEndAt) {
+            // 残りの遷移を概算で進める（work/breakの周期）
+            const cycleMs = durationMsForMode("work") + durationMsForMode("break");
+            const delta = now - currentEndAt;
+            const jumpCycles = Math.floor(delta / cycleMs);
+            currentEndAt += jumpCycles * cycleMs;
+
+            // もう一度、最大2回だけ正確に合わせる
+            for (let i = 0; i < 4 && now >= currentEndAt; i++) {
+              const nextMode = currentMode === "work" ? "break" : "work";
+              currentMode = nextMode;
+              currentEndAt = currentEndAt + durationMsForMode(nextMode);
+            }
+          }
+
+          // モードが変わっていたら反映
+          if (currentMode !== mode) {
+            setMode(currentMode);
+          }
+          if (currentEndAt !== endAtMs) {
+            setEndAtMs(currentEndAt);
+          }
+
+          setNowTick(now);
+        };
+
+        // 画面更新用インターバル（バックグラウンドで止まっても問題ない）
+        useEffect(() => {
+          if (!isRunning) return;
+          const id = setInterval(() => {
+            syncNow();
+          }, 500);
+          return () => clearInterval(id);
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [isRunning, endAtMs, mode]);
+
+        // hidden→visible 等で必ず追いつく
+        useEffect(() => {
+          const onVisibility = () => {
+            if (document.visibilityState === "visible") {
+              syncNow();
+            }
+          };
+          const onFocus = () => syncNow();
+          const onPageshow = () => syncNow();
+
+          document.addEventListener("visibilitychange", onVisibility);
+          window.addEventListener("focus", onFocus);
+          window.addEventListener("pageshow", onPageshow);
+
+          return () => {
+            document.removeEventListener("visibilitychange", onVisibility);
+            window.removeEventListener("focus", onFocus);
+            window.removeEventListener("pageshow", onPageshow);
+          };
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [isRunning, endAtMs, mode]);
+
+        // モード切替音（モードが実際に変わった時だけ）
         useEffect(() => {
           if (firstRender.current) {
             firstRender.current = false;
+            prevModeRef.current = mode;
             return;
           }
+
+          const prevMode = prevModeRef.current;
+          prevModeRef.current = mode;
+
+          if (prevMode === mode) return;
           if (!isRunning || !soundEnabled) return;
+          beep();
+        }, [mode, isRunning, soundEnabled]);
 
-          const ctx = new (window.AudioContext || window.webkitAudioContext)();
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
+        // 永続化: 状態を localStorage に保存
+        useEffect(() => {
+          const payload = {
+            v: 2,
+            mode,
+            isRunning,
+            soundEnabled,
+            endAtMs,
+            pausedRemainingMs,
+          };
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+          } catch (e) {}
+        }, [mode, isRunning, soundEnabled, endAtMs, pausedRemainingMs]);
 
-          osc.type = "sine";
-          osc.frequency.value = 880;
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          gain.gain.setValueAtTime(0.15, ctx.currentTime);
-          osc.start();
-          osc.stop(ctx.currentTime + 0.3);
-          osc.onended = () => ctx.close();
-        }, [isRunning, mode, soundEnabled]);
+        // 起動時に復元
+        useEffect(() => {
+          try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (!parsed || parsed.v !== 2) return;
 
-        const handleStart = () => setIsRunning(true);
-        const handleStop = () => setIsRunning(false);
+            if (parsed.mode === "work" || parsed.mode === "break") setMode(parsed.mode);
+            if (typeof parsed.soundEnabled === "boolean") setSoundEnabled(parsed.soundEnabled);
+            if (typeof parsed.isRunning === "boolean") setIsRunning(parsed.isRunning);
+            if (typeof parsed.endAtMs === "number") setEndAtMs(parsed.endAtMs);
+            if (typeof parsed.pausedRemainingMs === "number") setPausedRemainingMs(parsed.pausedRemainingMs);
+
+            // 復元直後に追いつく
+            setTimeout(() => {
+              // ここではまだ state が反映されていない可能性があるので nowTick だけ更新
+              setNowTick(Date.now());
+            }, 0);
+          } catch (e) {}
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, []);
+
+        // isRunning=true で endAtMs が無い場合（初回startや状態破損）に補正
+        useEffect(() => {
+          if (!isRunning) return;
+          if (typeof endAtMs === "number") {
+            syncNow();
+            return;
+          }
+
+          const now = Date.now();
+          const baseMs = typeof pausedRemainingMs === "number" ? pausedRemainingMs : durationMsForMode(mode);
+          setPausedRemainingMs(null);
+          setEndAtMs(now + baseMs);
+          setNowTick(now);
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [isRunning]);
+
+        const handleStart = () => {
+          const now = Date.now();
+
+          // 既に動作中なら何もしない
+          if (isRunning) return;
+
+          const remainMs = typeof pausedRemainingMs === "number" ? pausedRemainingMs : durationMsForMode(mode);
+          setPausedRemainingMs(null);
+          setEndAtMs(now + remainMs);
+          setIsRunning(true);
+          setNowTick(now);
+        };
+
+        const handleStop = () => {
+          const now = Date.now();
+          if (!isRunning) return;
+
+          // 直前に追いついてから停止
+          const remainMs = typeof endAtMs === "number" ? Math.max(0, endAtMs - now) : durationMsForMode(mode);
+          setPausedRemainingMs(remainMs);
+          setIsRunning(false);
+          setEndAtMs(null);
+          setNowTick(now);
+        };
+
         const handleReset = () => {
+          const now = Date.now();
           setIsRunning(false);
           setMode("work");
-          setSecondsLeft(WORK_DURATION);
+          setEndAtMs(null);
+          setPausedRemainingMs(null);
+          setNowTick(now);
         };
 
         return (
@@ -163,7 +358,7 @@
             </div>
 
             <div className="display">
-              <p className="mode-label">{mode === "work" ? "集中タイム" : "休憩タイム"}</p>                
+              <p className="mode-label">{mode === "work" ? "集中タイム" : "休憩タイム"}</p>
               <p className="time" role="timer" aria-live="polite">
                 {formatTime(secondsLeft)}
               </p>
@@ -199,6 +394,7 @@
               <li>スタートを押すと25分の作業と5分の休憩を無限に繰り返します。</li>
               <li>ストップで現在のカウントを一時停止します。再度スタートで再開します。</li>
               <li>リセットすると25:00の作業タイマーから再スタートできます。</li>
+              <li>スマホがロックされたり別タブへ移動しても、復帰時に正しい残り時間へ追いつきます。</li>
             </ul>
           </div>
         );
